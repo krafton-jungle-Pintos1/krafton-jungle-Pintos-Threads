@@ -95,6 +95,10 @@ struct thread {
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
+	/* ============== project 1 =============== */
+	int64_t wakeup_ticks;       // 일어날 시각 추가
+
+
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
@@ -142,5 +146,11 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+/* =========== project 1 =========== */
+void thread_sleep (int64_t ticks);
+bool cmp_thread_ticks(const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_wakeup (int64_t global_ticks);
+
 
 #endif /* threads/thread.h */
