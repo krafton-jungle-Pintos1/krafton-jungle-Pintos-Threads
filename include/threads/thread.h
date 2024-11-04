@@ -152,5 +152,8 @@ void thread_sleep (int64_t ticks);
 bool cmp_thread_ticks(const struct list_elem *a, const struct list_elem *b, void *aux);
 void thread_wakeup (int64_t global_ticks);
 
+/* =========== project1 - priority*/
+bool cmp_thread_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+void preempt_priority(void);
 
 #endif /* threads/thread.h */

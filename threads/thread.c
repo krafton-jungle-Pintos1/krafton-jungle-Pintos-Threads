@@ -211,6 +211,10 @@ thread_create (const char *name, int priority,
 	/* Add to run queue. */
 	thread_unblock (t);
 
+	/* 새로 들어온 쓰레드와 현재 실행중인 쓰레드의 우선순위를 비교한다.
+		만약 새로 들어온 쓰레드의 우선순위가 더 높다면 현재 실행중인 쓰레드에서 CPU를 양보한다. */
+	preempt_priority();
+
 	return tid;
 }
 
@@ -239,13 +243,15 @@ thread_block (void) {
 void
 thread_unblock (struct thread *t) {
 	enum intr_level old_level;
-
 	ASSERT (is_thread (t));
-
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
 
-	list_push_back (&ready_list, &t->elem);
+	// list_push_back (&ready_list, &t->elem);
+
+	/* priority가 높은 스레드가 앞부분에 위치하도록 정렬 */
+	list_insert_ordered(&ready_list, &t->elem, cmp_thread_priority, NULL);
+
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -303,12 +309,14 @@ void
 thread_yield (void) {
 	struct thread *curr = thread_current ();
 	enum intr_level old_level;
-
 	ASSERT (!intr_context ());
-
 	old_level = intr_disable ();
+
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		// list_push_back (&ready_list, &curr->elem);
+
+		/* priority가 높은 스레드가 앞부분에 위치하도록 정렬 */
+		list_insert_ordered(&ready_list, &curr->elem, cmp_thread_priority, NULL);
 
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
@@ -318,6 +326,10 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+
+	/* ===========project 1 - priority ============ */
+	/* ready_list에 있는 스레드보다 Priority를 비교해서 현재 변경된 priority가 더 낮다면, 즉시 CPU를 야보한다. */
+	preempt_priority();
 }
 
 /* Returns the current thread's priority. */
@@ -633,9 +645,35 @@ void thread_wakeup(int64_t current_ticks)
 		{
 			curr_elem = list_remove(curr_elem); // sleep_list에서 제거, curr_elem에는 다음 elem이 담김
 			thread_unblock(curr_thread);        // ready_list로 이동
+
+			/* ======= project1 - priority ========*/
+			preempt_priority();
 		}
 		else
 			break;
 	}
 	intr_set_level(old_level); // 인터럽트 상태를 원래 상태로 변경
+}
+
+/* ============== project1 - priority =============*/
+
+/* ready_list에서 priority가 높은 스레드가 앞으로 가도록 정렬 */
+bool cmp_thread_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+	struct thread *st_a = list_entry(a, struct thread, elem);
+	struct thread *st_b = list_entry(b, struct thread, elem);
+	return st_a->priority > st_b->priority;
+}
+
+void preempt_priority(void)
+{
+	if (thread_current() == idle_thread)
+		return;
+	if(list_empty(&ready_list))
+		return;
+	struct thread *curr = thread_current();
+	struct thread *ready = list_entry(list_front(&ready_list), struct thread, elem);
+	
+	/* ready_list에 현재 실행중인 스레드보다 우선순위가 높은 스레드가 있으면 */
+	if(curr->priority < ready->priority)
+		thread_yield();
 }
