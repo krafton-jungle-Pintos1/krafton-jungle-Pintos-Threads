@@ -7,6 +7,7 @@
 #include "threads/io.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include <list.h>
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -24,16 +25,24 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+/* 대기중인 스레드 리스트 */
+static struct list sleeping_list;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
+static bool wakeup_time_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
    corresponding interrupt. */
 void
 timer_init (void) {
+
+	/* 대기 리스트 초기화 */
+	list_init(&sleeping_list);
+
 	/* 8254 input frequency divided by TIMER_FREQ, rounded to
 	   nearest. */
 	uint16_t count = (1193180 + TIMER_FREQ / 2) / TIMER_FREQ;
@@ -88,13 +97,45 @@ timer_elapsed (int64_t then) {
 }
 
 /* Suspends execution for approximately TICKS timer ticks. */
+/* 현재 시간을 확인하고 thread_yield()로 충분한 시간이 지날 때까지 호출하는 루프에서 회전.
+=> busy waiting임. 이을 피하기 위해 코드 수정. */
 void
 timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+	/*
+	- 대기 시간 동안 스레드를 `BLOCKED` 상태로 변경.
+	- 시간이 지나면 `READY` 상태로 변경해 실행 가능 상태로..
+	*/
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+    /* 대기 시간이 유효하지 않으면 return */
+    if (ticks <= 0) return;
+
+    /* 현재 틱을 가져와서 wake-up 시간을 계산 */
+    int64_t wake_up_time = timer_ticks() + ticks;
+
+    /* 현재 인터럽트 상태를 저장하고 인터럽트 비활성화 */
+    enum intr_level old_level = intr_disable();
+
+    struct thread *current = thread_current();
+    current->wakeup_time = wake_up_time;
+
+    /* 대기 리스트에 현재 스레드 추가 
+	리스트의 기존 스레드와 새로 추가할 스레드를 wakeup_time 기준으로 정렬해서 추가*/
+    list_insert_ordered(&sleeping_list, &current->elem, wakeup_time_less, NULL);
+
+    /* 스레드 상태를 BLOCKED로 바꾸고 기다림 */
+    thread_block();
+
+    /* 이전 상태로 복귀 */
+    intr_set_level(old_level);
+
+
+}
+
+bool /*wakeup_time을 기준으로 정렬하기 위한 비교 함수*/
+wakeup_time_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    struct thread *t_a = list_entry(a, struct thread, elem);
+    struct thread *t_b = list_entry(b, struct thread, elem);
+    return t_a->wakeup_time < t_b->wakeup_time;
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -126,6 +167,31 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+
+	/*    
+    # waiting_list를 확인하고, 깨어날 시간이 지난 스레드를 "깨운다"
+    for each thread in waiting_list:
+        if current_ticks() >= wakeup_time:
+            remove_from_waiting_list(thread)
+            unblock_thread(thread)  # 스레드를 "READY" 상태로 전환*/
+
+
+    /* 
+	깨어날 시간이 된 스레드를 깨움.
+	깨어날 시간이 지난 스레드를 리스트에서 제거하고 READY 상태로.. */
+    while (!list_empty(&sleeping_list)) {
+        struct thread *t = list_entry(list_front(&sleeping_list), struct thread, elem);
+        
+        if (t->wakeup_time > ticks) break; // 현재 틱이 wake_up_time보다 작으면 종료
+
+        /* 시간이 지난 스레드를 리스트에서 제거하고 깨움 */
+        list_pop_front(&sleeping_list);
+        thread_unblock(t);
+    }
+
+
+
+
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
