@@ -98,6 +98,11 @@ struct thread {
 	/* ============== project 1 =============== */
 	int64_t wakeup_ticks;       // 일어날 시각 추가
 
+	int init_priority;
+    struct lock *wait_on_lock;
+    struct list donations;
+    struct list_elem donation_elem;
+
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -156,5 +161,12 @@ void thread_wakeup (int64_t global_ticks);
 bool cmp_thread_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 bool cmp_sema_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
 void preempt_priority(void);
+
+/* =========== project1 - priority donation ======= */
+bool cmp_donation_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
+void donate_priority(void);
+void remove_donor(struct lock *lock);
+void update_priority_for_donations(void);
+
 
 #endif /* threads/thread.h */
