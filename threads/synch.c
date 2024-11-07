@@ -188,8 +188,19 @@ lock_acquire (struct lock *lock) {
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
-	sema_down (&lock->semaphore);
-	lock->holder = thread_current ();
+	struct thread *curr = thread_current();
+ 	if (lock->holder != NULL) {
+ 	  curr->wait_on_lock = lock;
+ 	  list_push_back(&lock->holder->donors, &curr->donor_elem);
+ 	  donate_priority();
+ 	}
+  
+  	sema_down (&lock->semaphore);
+  	curr->wait_on_lock = NULL;
+  	lock->holder = curr;
+
+	// sema_down (&lock->semaphore);
+	// lock->holder = thread_current ();
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -222,6 +233,7 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 
+	// remove_with_lock(lock);     // 우선순위 기부 제거
 	lock->holder = NULL;
 	sema_up (&lock->semaphore);
 }
@@ -320,4 +332,53 @@ cond_broadcast (struct condition *cond, struct lock *lock) {
 
 	while (!list_empty (&cond->waiters))
 		cond_signal (cond, lock);
+}
+
+
+
+/* Priority donation을 위한 새로운 함수들 */
+void
+donate_priority (void) {
+  int depth;
+  struct thread *curr = thread_current();
+  struct lock *lock = curr->wait_on_lock;
+
+  for (depth = 0; depth < 8 && lock != NULL; depth++) {
+    if (lock->holder == NULL)
+      break;
+    if (lock->holder->priority >= curr->priority)
+      break;
+    lock->holder->priority = curr->priority;
+    curr = lock->holder;
+    lock = curr->wait_on_lock;
+  }
+}
+
+void
+remove_with_lock (struct lock *lock) {
+  struct thread *curr = thread_current();
+  struct list_elem *e;
+  
+  for (e = list_begin(&curr->donors); 
+       e != list_end(&curr->donors); 
+       e = list_next(e)) {
+    struct thread *t = list_entry(e, struct thread, donor_elem);
+    if (t->wait_on_lock == lock)
+      list_remove(&t->donor_elem);
+  }
+  update_priority();
+}
+
+void
+update_priority (void) {
+  struct thread *curr = thread_current();
+  curr->priority = curr->base_priority;
+  
+  if (!list_empty(&curr->donors)) {
+    struct thread *donor = list_entry(
+      list_max(&curr->donors, thread_compare_priority, NULL),
+      struct thread, donor_elem);
+    if (donor->priority > curr->priority)
+      curr->priority = donor->priority;
+  }
 }

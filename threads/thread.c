@@ -236,13 +236,21 @@ void
 thread_unblock (struct thread *t) {
 	enum intr_level old_level;
 
-	ASSERT (is_thread (t));
+  	ASSERT (is_thread (t));
 
-	old_level = intr_disable ();
-	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
-	t->status = THREAD_READY;
-	intr_set_level (old_level);
+  	old_level = intr_disable ();
+  	ASSERT (t->status == THREAD_BLOCKED);
+  
+  	// 우선순위 순서로 삽입
+  	list_insert_ordered (&ready_list, &t->elem, thread_compare_priority, NULL);
+  	t->status = THREAD_READY;
+  	intr_set_level (old_level);
+
+  	// 현재 실행 중인 스레드보다 우선순위가 높다면 즉시 양보
+  	if (thread_current() != idle_thread && 
+    	thread_current()->priority < t->priority) {
+    	thread_yield();
+  	}
 }
 
 /* Returns the name of the running thread. */
@@ -296,22 +304,32 @@ thread_exit (void) {
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) {
-	struct thread *curr = thread_current ();
-	enum intr_level old_level;
+  	struct thread *curr = thread_current ();
+  	enum intr_level old_level;
 
-	ASSERT (!intr_context ());
+  	ASSERT (!intr_context ());
 
-	old_level = intr_disable ();
-	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
-	do_schedule (THREAD_READY);
-	intr_set_level (old_level);
+  	old_level = intr_disable ();
+  	if (curr != idle_thread)
+    // 우선순위 순서로 삽입
+    	list_insert_ordered (&ready_list, &curr->elem, thread_compare_priority, NULL);
+  	do_schedule (THREAD_READY);
+  	intr_set_level (old_level);
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	// thread_current ()->priority = new_priority;
+	if (thread_mlfqs)
+    	return;
+    
+  	thread_current ()->priority = new_priority;
+
+  // 레디 큐에 현재 스레드보다 우선순위가 높은 스레드가 있다면 즉시 양보
+  	if (!list_empty(&ready_list) && new_priority < list_entry(list_front(&ready_list), struct thread, elem)->priority) {
+    	thread_yield();
+  	}
 }
 
 /* Returns the current thread's priority. */
@@ -587,4 +605,16 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+
+/* thread_unblock()에서 우선순위 비교를 위한 함수 추가 */
+bool 
+thread_compare_priority (const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux UNUSED) {
+  struct thread *thread_a = list_entry(a, struct thread, elem);
+  struct thread *thread_b = list_entry(b, struct thread, elem);
+  
+  return thread_a->priority > thread_b->priority;
 }
